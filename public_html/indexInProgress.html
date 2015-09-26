@@ -1,0 +1,392 @@
+
+
+<html>
+    <head>
+        
+        <title>Pigeon Supreme</title>
+        
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+        <!--Knockout-->
+        <script src="js/libs/jquery/jquery.js"></script>
+        <script src="js/libs/knockout/knockout-min.js"></script>
+        
+        <!--bootstrap-->
+        <link rel="stylesheet" href="js/libs/twitter-bootstrap/css/bootstrap.min.css" />
+        <link rel="stylesheet" href="js/libs/twitter-bootstrap/css/bootstrap-theme.min.css" />
+        <script src="js/libs/twitter-bootstrap/js/bootstrap.js"></script>
+        
+        <!--Leaflet Core-->
+        <link rel="stylesheet" href="js/libs/leaflet/leaflet.css" />
+        <script src="js/libs/leaflet/leaflet.js"></script>
+        
+        <!--Leaflet Marker Clusters-->
+        <link rel="stylesheet" href="js/libs/leaflet/MarkerCluster.css" />
+        <link rel="stylesheet" href="js/libs/leaflet/MarkerCluster.Default.css" />
+        <script src="js/libs/leaflet/leaflet.markercluster.js"></script>
+        
+        <!--Leaflet Draw-->
+        <link rel="stylesheet" href="js/libs/leaflet/leaflet.draw.css" />
+        <script src="js/libs/leaflet/leaflet.draw.js"></script>
+        
+        <style>
+            #map {
+                height: 100%;
+                width: 100%;
+            }
+        </style>
+        
+    </head>
+    
+    <body>
+        
+        <div class="container-fluid">
+        
+            <div class="row">
+                
+                <div class="col-sm-12 col-md-3" style="">
+                
+                    <h3>Pigeon-Supreme<br/> <small>Right click on map to place hub marker</small></h3>
+
+                    <input type="text" class="form-control" placeholder="Title of Marker"/><br/>
+                    
+                    <textarea class="form-control" id="userComment" style="width:100%; resize:vertical;"  placeholder="Say it like you mean it!" maxlength="500"></textarea>
+                   
+                    <br /> 
+                    
+                    <label><input type="checkbox" id="makeHidden"> Hide From Recent Posts</label>
+                    
+                    <br />
+                    <br /> 
+                    
+                    <button  class="btn btn-default" style="width:100%; " type="button" onclick="makePost()">
+                        Submit Comment
+                    </button>
+                    
+                    <br />
+                    
+                    
+                    <div id="selectedMarkerInfo">
+                        <h3 data-bind="text: title"></h3>
+                    </div>
+                    
+                    <div id='share' style='visibility:hidden'>
+                        <br/>
+                        Share what you've created with a friend!
+                        
+                        <input class='form-control' type='text' id='shareURL'>
+                        
+                    </div>
+                    
+                </div>
+                
+                <div class="col-sm-12 col-md-9" style="padding-left: 0px;padding-right: 0px;">
+                    <div id="map"></div>
+                </div>
+                
+            </div>
+        
+        </div>
+        
+        
+        <script>
+
+            var map;
+            var drawnItems;
+            
+            function mapInitialize(){
+                
+                map = L.map('map').setView([33.456062,-88.7948509], 13);
+                
+            
+                L.tileLayer('http://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                            attribution: 'Map data © <a href="http://openstreetmap.org">OpenStreetMap</a> contributors',
+                            maxZoom: 18
+                            }).addTo(map);
+
+                // Initialise the FeatureGroup to store editable layers
+                drawnItems = new L.FeatureGroup();
+                map.addLayer(drawnItems);
+
+                // Initialise the draw control and pass it the FeatureGroup of editable layers
+                var drawControl = new L.Control.Draw({
+                    edit: {
+                        featureGroup: drawnItems
+                    }
+                });
+                map.addControl(drawControl);
+
+                //Allow drawn items to actually be added to the map
+                map.on('draw:created', function (e) {
+                    var type = e.layerType,
+                        layer = e.layer;
+
+                    if (type === 'marker') {
+                        // Do marker specific actions
+                    }
+
+                    // Do whatever else you need to. (save to db, add to map etc)
+                    map.addLayer(layer);
+                    drawnItems.addLayer(layer);
+                });
+                
+                //If we want to view a specific post display it, else load recent posts
+                if(getParameterByName("post") !== ""){
+                    loadSpecificPosts(getParameterByName("post"));
+                } else {
+                    getRecentPosts();
+                    map.locate({setView: true, maxZoom: 16});
+                }
+                
+            }
+            
+            mapInitialize();
+            
+            function loadSpecificPosts(postID){
+                
+                getPostJSON(postID, function(postData){
+                    
+                    for(var i = 0; i < postData.length; i ++){
+
+                        var location = postData[i].cord.split(",");
+
+                        var marker = L.marker([location[0], location[1]]);
+                        marker.addTo(map);
+                        marker.bindPopup(postData[i].content).openPopup();
+
+                        map.setView([location[0], location[1]], 13);
+
+                        var parsedGeoJson = null;
+
+                        //try parsing data to JSON
+                        try{
+                            parsedGeoJson = JSON.parse(postData[i].geoJSON);
+                        } catch(e){}
+
+                        //Add events to display the marker's geojson if it has any
+                        if(parsedGeoJson !== null){
+
+                            var jsonLayer = L.geoJson( parsedGeoJson );
+
+                            jsonLayer.addTo(map);
+
+                            map.fitBounds(jsonLayer.getBounds());
+
+                        }
+
+                    }
+                    
+                });
+                
+            }
+            
+            
+            /**
+             * Calls the server and retrives JSON representing a certain post 
+             * with any contents needed to display it properly.
+             * 
+             * @param {int} postID The id of the post we want to get
+             * @param {function} cb
+             * @returns {undefined}
+             */
+            function getPostJSON(postID, cb){
+                
+                var xmlhttp = new XMLHttpRequest();
+                
+                xmlhttp.onreadystatechange = function() {
+                    if (xmlhttp.readyState === 4 && xmlhttp.status === 200) {
+                        
+                        var postData = JSON.parse(xmlhttp.responseText);
+                        
+                        cb(postData);
+                        
+                    } else {
+                        cb();
+                    }
+                };
+                
+                xmlhttp.open("GET", 
+                "http://www.jayusstudios.com/handlers/pigeonSupreme.php?cmd=viewPost&id="+postID, true);
+                
+                xmlhttp.send();
+                
+            }
+            
+            var jsonLayers = [];
+            
+            function getRecentPosts() {
+                var xmlhttp = new XMLHttpRequest();
+                xmlhttp.onreadystatechange = function() {
+                    if (xmlhttp.readyState === 4 && xmlhttp.status === 200) {
+                        
+                        var postData = JSON.parse(xmlhttp.responseText);
+                        
+                        //Used for building the cluter layer
+                        var markers = new L.MarkerClusterGroup();
+                        
+                        for (var i = 0; i < postData.length; i++) {
+                            
+                            var location = postData[i].cord.split(",");
+                            
+                            var marker = L.marker([location[0], location[1]]);
+                            marker.bindPopup(postData[i].content);
+                            
+                            markers.addLayer(marker);
+                            
+                            var parsedGeoJson = null;
+                            
+                            //try parsing data to JSON
+                            try{
+                                parsedGeoJson = JSON.parse(postData[i].geoJSON);
+                            } catch(e){}
+                            
+                            //Add events to display the marker's geojson if it has any
+                            if(parsedGeoJson !== null){
+                                
+                                var id = (L.stamp(marker));
+
+                                jsonLayers[id] = L.geoJson( parsedGeoJson );
+
+                                marker.on('popupopen',function(e){
+
+                                    jsonLayers[e.target._leaflet_id].addTo(map);
+                                    
+                                });
+                                
+                                marker.on('popupclose',function(e){
+                                    map.removeLayer( jsonLayers[e.target._leaflet_id] );
+                                });
+                            }
+                            
+                        }
+                        
+                        
+                        map.addLayer(markers);
+                        
+                    }
+                };
+                
+                xmlhttp.open("GET", "http://www.jayusstudios.com/handlers/pigeonSupreme.php?cmd=recent", true);
+                xmlhttp.send();
+            }
+            
+        
+            function addPostToServer(location, content) {
+                
+                var xmlhttp = new XMLHttpRequest();
+                
+                xmlhttp.onreadystatechange = function() {
+                    if (xmlhttp.readyState === 4 && xmlhttp.status === 200) {
+                        var results = JSON.parse(xmlhttp.responseText);
+                        
+                        console.log(results);
+                        
+                        var url = "http://www.jayusstudios.com/Projects/PigeonSupreme/?post="+results.rowId;
+                        
+                        document.getElementById("share").style.visibility = 'visible';
+                        document.getElementById("shareURL").value = url;
+                        
+                    }
+                };
+                var url = "http://www.jayusstudios.com/handlers/pigeonSupreme.php?cmd=addPost&loc=" + 
+                        location + "&content=" + content+"&gj="+JSON.stringify(drawnItems.toGeoJSON()) +"&hidden=";
+
+                if(document.getElementById("makeHidden").checked){
+                    url += "1";
+                } else {
+                    url += "0";
+                }
+
+                xmlhttp.open("POST", url, true);
+                
+                xmlhttp.send();
+                
+            }
+        
+            function placePost(lat, lng, content) {
+                
+                var marker = L.marker([lat, lng]).addTo(map);
+                marker.bindPopup(content).openPopup();
+                
+                return marker;
+                
+            }
+        
+            function makePost() {
+                
+                
+                if(postMarker === null){
+                    alert("You must place a marker on the map!");
+                    return;
+                }
+                
+                if (document.getElementById("userComment").value === null || document.getElementById("userComment").value === "") {
+                    alert("Stop right there! You're trying to make a comment without commentary!");
+                    return;
+                } else {
+                    
+                    //get the appropriate string value
+                    var locationString = postMarker.getLatLng().lat + "," + postMarker.getLatLng().lng;
+
+                    //post the information to the server
+                    addPostToServer(locationString, document.getElementById("userComment").value);
+                    
+                    //create a new marker representing the post we just made
+                    placePost(postMarker.getLatLng().lat , postMarker.getLatLng().lng, document.getElementById("userComment").value);
+                    
+                    //Clear everything
+                    document.getElementById("userComment").value = null;
+                    map.removeLayer(postMarker);
+                    postMarker = null;
+                    
+                }
+                
+            }
+        
+            var postMarker = null;
+        
+            function setPostMarker(e){
+                
+                if(postMarker !== null){
+                    map.removeLayer(postMarker);
+                }
+                
+                postMarker = placePost(e.latlng.lat, e.latlng.lng, "This is where your post will show up!");
+                
+                postMarker.setOpacity(.5);
+                
+            }
+        
+            map.on('contextmenu', setPostMarker);
+            
+            
+            function SelectedPostViewModel(){
+                
+                var self = this;
+                
+                self.title = ko.observable("YEAYUH");
+                
+                self.description = ko.observable("Descr");
+                
+            }
+            
+            var selectedPostViewModel = new SelectedPostViewModel();
+            
+            ko.applyBindings(selectedPostViewModel ,document.getElementById("selectedMarkerInfo"));
+            
+            /**
+             * stof http://stackoverflow.com/questions/901115/how-can-i-get-query-string-values-in-javascript
+             * @param {type} name
+             * @returns {String}
+             */
+            function getParameterByName(name) {
+                name = name.replace(/[\[]/, "\\[").replace(/[\]]/, "\\]");
+                var regex = new RegExp("[\\?&]" + name + "=([^&#]*)"),
+                    results = regex.exec(location.search);
+                return results === null ? "" : decodeURIComponent(results[1].replace(/\+/g, " "));
+            }
+
+        </script>
+        
+    </body>
+</html>
